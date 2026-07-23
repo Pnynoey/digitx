@@ -1,5 +1,10 @@
 'use client';
 
+/**
+ * The real, functional Digits app (live WebSocket, real auth/trading), rendered
+ * via DigitsView. Added 100% Auto Trading Engine for Cluster Trend Differ.
+ */
+
 import { useEffect, useState, useRef } from 'react';
 import { useDigitsTrading } from '../hooks/use-digits-trading';
 import { useDerivWSContext } from '@/components/custom/deriv-ws-provider';
@@ -64,15 +69,27 @@ export function LiveDigits({
           const avoidDigit = d2;
           setIsTradingLock(true);
 
-          console.log(`🤖 AUTO Engine: เจอจังหวะ! สั่งยิง Differ ห้ามออกเลข ${avoidDigit}`);
+          console.log(`🤖 AUTO Engine: สั่งยิง Differ ห้ามออกเลข ${avoidDigit}`);
 
-          // ปรับเลือกเลขห้ามออก
+          // ปรับประเภทสัญญาและสลับเป็น Differ
+          try {
+            if (trading.setContractMode) {
+              (trading.setContractMode as any)('MATCHES_DIFF');
+            }
+            if (trading.setTradeType) {
+              (trading.setTradeType as any)('DIGITDIFF');
+            }
+          } catch (e) {
+            console.error('Error setting mode:', e);
+          }
+
+          // เลือกเลขห้ามออก
           trading.setSelectedDigit(avoidDigit);
 
           // สั่งซื้อสัญญาทันที!
           setTimeout(() => {
             trading.buyContract();
-          }, 350);
+          }, 400);
         }
       }
     }
