@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DigitX - Cluster Trend Differ Bot</title>
+    <style>
+        :root {
+            --bg: #0b0e14;
+            --card: #151d28;
+            --accent: #00e676;
+            --danger: #ff5252;
+            --text: #ffffff;
+            --sub: #8b9aae;
+            --border: #222e3e;
+        }
+        body { background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 15px; display: flex; justify-content: center; }
+        .app-card { width: 100%; max-width: 420px; background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 20px; box-sizing: border-box; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .logo { font-size: 20px; font-weight: 800; color: var(--accent); letter-spacing: 1px; }
+        .status { font-size: 12px; padding: 4px 10px; border-radius: 20px; background: #222e3e; color: var(--sub); }
+        .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+        .stat-box { background: var(--bg); padding: 12px; border-radius: 10px; text-align: center; border: 1px solid var(--border); }
+        .stat-title { font-size: 11px; color: var(--sub); }
+        .stat-value { font-size: 18px; font-weight: bold; margin-top: 4px; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; font-size: 12px; color: var(--sub); margin-bottom: 6px; }
+        .form-group input { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: #fff; box-sizing: border-box; font-size: 14px; }
+        .btn { width: 100%; padding: 14px; border-radius: 10px; border: none; font-weight: bold; font-size: 16px; cursor: pointer; transition: 0.2s; }
+        .btn-login { background: #2979ff; color: white; }
+        .btn-start { background: var(--accent); color: #000; }
+        .btn-stop { background: var(--danger); color: white; }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .log-box { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 12px; height: 90px; overflow-y: auto; color: var(--sub); margin-top: 15px; font-family: monospace; }
+    </style>
+</head>
+<body>
+
+<div class="app-card">
+    <div class="header">
+        <div class="logo">⚡ DIGITX AI</div>
+        <div id="status" class="status">Offline</div>
+    </div>
+
+    <!-- Login Area -->
+    <div id="loginArea">
+        <button class="btn btn-login" onclick="login()">1. Connect Deriv Account</button>
+    </div>
+
+    <!-- Main Dashboard Area -->
+    <div id="dashArea" style="display:none;">
+        <div class="stats-grid">
+            <div class="stat-box">
+                <div class="stat-title">TOTAL PROFIT</div>
+                <div id="totalProfit" class="stat-value" style="color:var(--accent)">$0.00</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-title">WIN / LOSS</div>
+                <div id="winLoss" class="stat-value">0 / 0</div>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Stake Amount ($)</label>
+            <input type="number" id="stake" value="1.00" step="0.5">
+        </div>
+
+        <button id="actionBtn" class="btn btn-start" onclick="toggleBot()">START BOT</button>
+    </div>
+
+    <!-- Console Log Box -->
+    <div id="logBox" class="log-box">รอเชื่อมต่อบัญชี...</div>
+</div>
+
+<script>
+    // -------------------------------------------------------------
+    // ⚠️ ใส่ App ID ของคุณตรงนี้ (นำมาจาก Deriv Developer Portal)
+    // -------------------------------------------------------------
+    const MY_APP_ID = 'YOUR_APP_ID_HERE'; 
+
+    let socket;
+    let userToken = '';
+    let isRunning = false;
+    let isTrading = false;
+    let tickHistory = [];
+    let totalProfit = 0;
+    let winCount = 0;
+    let lossCount = 0;
+
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('token1')) {
+        userToken = urlParams.get('token1');
+        initWebSocket();
+    }
+
+    function addLog(text) {
+        const box = document.getElementById('logBox');
+        box.innerHTML = `> ${text}<br>` + box.innerHTML;
+    }
+
+    function login() {
+        const redirectUri = window.location.href.split('?')[0];
+        window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${MY_APP_ID}&l=TH&redirect_uri=${redirectUri}`;
+    }
+
+    function initWebSocket() {
+        socket = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${MY_APP_ID}`);
+
+        socket.onopen = function() {
+            addLog("กำลังยืนยันตัวตน...");
+            socket.send(JSON.stringify({ authorize: userToken }));
+        };
+
+        socket.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+
+            if (data.msg_type === 'authorize') {
+                document.getElementById('status').innerText = 'Connected';
+                document.getElementById('status').style.color = '#00e676';
+                document.getElementById('loginArea').style.display = 'none';
+                document.getElementById('dashArea').style.display = 'block';
+                addLog("เชื่อมต่อบัญชีแล้ว: " + data.authorize.email);
+                
+                socket.send(JSON.stringify({ "ticks": "R_100" }));
+            }
+
+            if (data.msg_type === 'tick') {
+                const lastDigit = parseInt(data.tick.quote.toString().slice(-1));
+                tickHistory.push(lastDigit);
+                if (tickHistory.length > 10) tickHistory.shift();
+
+                // 🧠 LOGIC: ล่าพฤติกรรมเลขซ้ำ (Cluster Differ)
+                if (isRunning && !isTrading && tickHistory.length >= 4) {
+                    const len = tickHistory.length;
+                    const d1 = tickHistory[len - 1]; // ตาล่าสุด
+                    const d2 = tickHistory[len - 2]; // ตาก่อนหน้า
+                    const d3 = tickHistory[len - 3]; // 2 ตาก่อนหน้า
+
+                    if (d3 === d2 && d1 !== d2) {
+                        const targetAvoidDigit = d2;
+                        addLog(`🔥 พฤติกรรมเลขซ้ำ ${targetAvoidDigit} จบแล้ว! สั่งยิง Differ`);
+                        executeTrade(targetAvoidDigit);
+                    }
+                }
+            }
+
+            if (data.msg_type === 'proposal_open_contract') {
+                const contract = data.proposal_open_contract;
+                if (contract.is_sold) {
+                    const profit = contract.profit;
+                    totalProfit += profit;
+                    if (profit > 0) winCount++; else lossCount++;
+
+                    document.getElementById('winLoss').innerText = `${winCount} / ${lossCount}`;
+                    const pElem = document.getElementById('totalProfit');
+                    pElem.innerText = `${totalProfit >= 0 ? '+' : ''}$${totalProfit.toFixed(2)}`;
+                    pElem.style.color = totalProfit >= 0 ? 'var(--accent)' : 'var(--danger)';
+
+                    addLog(`ผลลัพธ์: ${profit > 0 ? '✅ ชนะ (+$' + profit.toFixed(2) + ')' : '❌ แพ้ ($' + profit.toFixed(2) + ')'}`);
+
+                    setTimeout(() => { isTrading = false; }, 2500);
+                }
+            }
+        };
+    }
+
+    function executeTrade(avoidDigit) {
+        isTrading = true;
+        const stakeAmount = parseFloat(document.getElementById('stake').value) || 1;
+
+        socket.send(JSON.stringify({
+            "buy": 1,
+            "price": stakeAmount,
+            "parameters": {
+                "amount": stakeAmount,
+                "basis": "stake",
+                "contract_type": "DIGITDIFF",
+                "currency": "USD",
+                "duration": 1,
+                "duration_unit": "t",
+                "symbol": "R_100",
+                "barrier": avoidDigit.toString()
+            }
+        }));
+
+        socket.send(JSON.stringify({
+            "proposal_open_contract": 1,
+            "subscribe": 1
+        }));
+    }
+
+    function toggleBot() {
+        const btn = document.getElementById('actionBtn');
+        if (!isRunning) {
+            isRunning = true;
+            btn.innerText = 'STOP BOT';
+            btn.className = 'btn btn-stop';
+            addLog("เริ่มรันบอท DigitX... กำลังวิเคราะห์ Pattern");
+        } else {
+            isRunning = false;
+            btn.innerText = 'START BOT';
+            btn.className = 'btn btn-start';
+            addLog("หยุดการทำงานของบอทแล้ว");
+        }
+    }
+</script>
+
+</body>
+</html>
