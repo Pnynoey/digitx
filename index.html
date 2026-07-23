@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DigitX - Auto Cluster Differ Bot</title>
+    <title>DigitX - 100% Auto Trade Engine</title>
     <style>
         :root {
             --bg: #0b0e14;
@@ -25,14 +25,14 @@
         .stat-value { font-size: 18px; font-weight: bold; margin-top: 4px; }
         .form-group { margin-bottom: 15px; }
         .form-group label { display: block; font-size: 12px; color: var(--sub); margin-bottom: 6px; }
-        .form-group input { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: #fff; box-sizing: border-box; font-size: 14px; }
+        .form-group input, .form-group select { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: #fff; box-sizing: border-box; font-size: 14px; }
         .btn { width: 100%; padding: 14px; border-radius: 10px; border: none; font-weight: bold; font-size: 16px; cursor: pointer; transition: 0.2s; }
         .btn-login { background: #2979ff; color: white; }
         .btn-start { background: var(--accent); color: #000; }
         .btn-stop { background: var(--danger); color: white; }
         .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-        .log-box { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 12px; height: 110px; overflow-y: auto; color: var(--sub); margin-top: 15px; font-family: monospace; }
-        .digit-bar { display: flex; justify-content: space-between; background: var(--bg); padding: 8px; border-radius: 8px; margin-bottom: 15px; border: 1px solid var(--border); font-size: 12px; }
+        .log-box { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 12px; height: 120px; overflow-y: auto; color: var(--sub); margin-top: 15px; font-family: monospace; }
+        .digit-bar { display: flex; justify-content: space-between; background: var(--bg); padding: 10px; border-radius: 8px; margin-bottom: 15px; border: 1px solid var(--border); font-size: 13px; }
     </style>
 </head>
 <body>
@@ -43,12 +43,12 @@
         <div id="status" class="status">Offline</div>
     </div>
 
-    <!-- Login Zone -->
+    <!-- Login Area -->
     <div id="loginArea">
         <button class="btn btn-login" onclick="login()">1. Connect Deriv Account</button>
     </div>
 
-    <!-- Dashboard Zone (Auto Hide) -->
+    <!-- Dashboard Area -->
     <div id="dashArea" style="display:none;">
         <div class="stats-grid">
             <div class="stat-box">
@@ -62,8 +62,8 @@
         </div>
 
         <div class="digit-bar">
-            <span>Ticks History:</span>
-            <b id="tickHistoryDisplay" style="color:var(--accent)">- - - - -</b>
+            <span>Live Ticks (R_100):</span>
+            <b id="tickHistoryDisplay" style="color:var(--accent); font-size: 15px;">- - - - -</b>
         </div>
 
         <div class="form-group">
@@ -80,20 +80,20 @@
 
 <script>
     // -------------------------------------------------------------
-    // ⚠️ [สำคัญมาก] ใส่ App ID นายหน้าของคุณตรงนี้
+    // ⚠️ ใส่ App ID ของคุณตรงนี้
     // -------------------------------------------------------------
     const MY_APP_ID = '33TQAVNIu9EHCoeWTBojS'; 
 
     let socket;
     let userToken = '';
     let isRunning = false;
-    let isTrading = false; // ตัวล็อกป้องกันยิงออเดอร์ซ้ำ
+    let isTrading = false; // ตัวล็อกป้องกันส่งออเดอร์ซ้ำระหว่างที่ถือสัญญาอยู่
     let tickHistory = [];
     let totalProfit = 0;
     let winCount = 0;
     let lossCount = 0;
 
-    // ตรวจสอบ Token OAuth หลังการกด Login
+    // ดึง Token จาก URL
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.has('token1')) {
         userToken = urlParams.get('token1');
@@ -121,44 +121,48 @@
         socket.onmessage = function(event) {
             const data = JSON.parse(event.data);
 
-            // 1. ยืนยันสิทธิ์สำเร็จ
+            // 1. Authorize สำเร็จ
             if (data.msg_type === 'authorize') {
                 document.getElementById('status').innerText = 'Online';
                 document.getElementById('status').style.color = '#00e676';
                 document.getElementById('loginArea').style.display = 'none';
                 document.getElementById('dashArea').style.display = 'block';
-                addLog("เชื่อมต่อสำเร็จ: " + data.authorize.email);
+                addLog("เชื่อมต่อแล้ว: " + data.authorize.email);
                 
-                // สั่ง Subscribe ดึงราคา Real-time
+                // เริ่มดึงข้อมูล Ticks Real-time ทันที
                 socket.send(JSON.stringify({ "ticks": "R_100" }));
             }
 
-            // 2. รับข้อมูล Tick สด & สั่งยิง AUTO เมื่อเข้าเงื่อนไข
+            // 2. เมื่อได้รับ Ticks สดเข้ามา (ระบบ AUTO จะทำงานที่จุดนี้)
             if (data.msg_type === 'tick') {
-                const lastDigit = parseInt(data.tick.quote.toString().slice(-1));
+                const price = data.tick.quote.toString();
+                const lastDigit = parseInt(price.slice(-1));
+                
                 tickHistory.push(lastDigit);
                 if (tickHistory.length > 5) tickHistory.shift();
 
-                // อัปเดตตัวเลขสดบน UI
+                // แสดงผลตัวเลขสดบนหน้าจอ
                 document.getElementById('tickHistoryDisplay').innerText = tickHistory.join(' ');
 
-                // 🧠 AUTO TRADING ENGINE:
+                // 🧠 AUTO ENGINE (ถ้ากด START ไว้ และบอทไม่ได้ถือสัญญาอยู่)
                 if (isRunning && !isTrading && tickHistory.length >= 4) {
                     const len = tickHistory.length;
                     const d1 = tickHistory[len - 1]; // ตาล่าสุด
                     const d2 = tickHistory[len - 2]; // ตาก่อนหน้า
                     const d3 = tickHistory[len - 3]; // 2 ตาก่อนหน้า
 
-                    // เงื่อนไข Pattern: ซ้ำติดกันแล้วมีเลขขัดจังหวะ
+                    // เงื่อนไข: เลขซ้ำกัน 2 ตา (d3 == d2) แล้วตามด้วยเลขอื่น (d1 != d2)
                     if (d3 === d2 && d1 !== d2) {
                         const avoidDigit = d2;
-                        addLog(`🤖 AUTO Engine: เจอจังหวะ! สั่งยิง Differ ห้ามออก ${avoidDigit}`);
-                        autoExecuteTrade(avoidDigit);
+                        addLog(`🤖 AUTO Engine: เจอเงื่อนไข! สั่งซื้อ Differ ห้ามออกเลข ${avoidDigit}`);
+                        
+                        // 🚀 สั่งซื้อให้อัตโนมัติทันที
+                        executeAutoTrade(avoidDigit);
                     }
                 }
             }
 
-            // 3. รับผลลัพธ์การซื้อขาย (Win/Loss)
+            // 3. รับผลลัพธ์เมื่อออเดอร์จบลง (เพื่อสรุปกำไร/ขาดทุน และสั่งรันต่อ)
             if (data.msg_type === 'proposal_open_contract') {
                 const contract = data.proposal_open_contract;
                 if (contract.is_sold) {
@@ -166,7 +170,7 @@
                     totalProfit += profit;
                     if (profit > 0) winCount++; else lossCount++;
 
-                    // อัปเดตตัวเลขผลลัพธ์สด
+                    // อัปเดต UI
                     document.getElementById('winLoss').innerText = `${winCount} / ${lossCount}`;
                     const pElem = document.getElementById('totalProfit');
                     pElem.innerText = `${totalProfit >= 0 ? '+' : ''}$${totalProfit.toFixed(2)}`;
@@ -174,22 +178,22 @@
 
                     addLog(`ผลการเทรด: ${profit > 0 ? '✅ ชนะ (+$' + profit.toFixed(2) + ')' : '❌ แพ้ ($' + profit.toFixed(2) + ')'}`);
 
-                    // คลายล็อกแล้วสแกนหาจังหวะออเดอร์ถัดไปอัตโนมัติ
+                    // คลายล็อก แล้วปล่อยให้บอทหาจังหวะยิงออเดอร์ถัดไปเองอัตโนมัติ
                     setTimeout(() => { 
                         isTrading = false; 
                         if(isRunning) addLog("ค้นหา Pattern ถัดไป...");
-                    }, 2500);
+                    }, 2000);
                 }
             }
         };
     }
 
-    // ฟังก์ชันยิงออเดอร์อัตโนมัติ
-    function autoExecuteTrade(avoidDigit) {
-        isTrading = true; // ล็อกไม่ให้ยิงซ้ำระหว่างถือสัญญา
+    // ฟังก์ชันสั่งส่งออเดอร์อัตโนมัติไปยัง Deriv
+    function executeAutoTrade(avoidDigit) {
+        isTrading = true; // ล็อกไว้ไม่ให้ส่งซ้ำ
         const stakeAmount = parseFloat(document.getElementById('stake').value) || 1;
 
-        // ส่งคำสั่งซื้อสัญญา Differ
+        // ส่งคำสั่ง Buy Digit Differ
         socket.send(JSON.stringify({
             "buy": 1,
             "price": stakeAmount,
@@ -205,7 +209,7 @@
             }
         }));
 
-        // Subscribe รอรับผลกำไร/ขาดทุน
+        // Subscribe เพื่อติดตามผลการแข่งแบบ Real-time
         socket.send(JSON.stringify({
             "proposal_open_contract": 1,
             "subscribe": 1
@@ -218,7 +222,7 @@
             isRunning = true;
             btn.innerText = 'STOP AUTO BOT';
             btn.className = 'btn btn-stop';
-            addLog("🚀 เริ่มระบบ AUTO TRADING... ปล่อยมือได้เลย");
+            addLog("🚀 เริ่มระบบ AUTO TRADING... ระบบกำลังทำงานให้อัตโนมัติ");
         } else {
             isRunning = false;
             btn.innerText = 'START AUTO BOT';
