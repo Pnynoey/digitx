@@ -1,18 +1,69 @@
 'use client';
 
 /**
- * Deriv App Builder - Anti-Crash Continuous Quant Trading Bot
+ * Deriv App Builder - Ultra Bulletproof Quant Bot
  * File: components/live-digits.tsx
  */
 
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useDigitsTrading } from '../hooks/use-digits-trading';
 import { useDerivWSContext } from '@/components/custom/deriv-ws-provider';
 import { useLogoSrc } from '@/components/custom/logo-src-provider';
 import { DigitsView } from './digits-view';
 import type { DigitsAppConfig } from '../lib/app-config';
 
+// 🛡️ CLASS ERROR BOUNDARY กันหน้าเว็บล้มพับ
+class SafeBotBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: any) {
+    console.error('Captured Bot Exception:', error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="fixed bottom-4 right-4 z-50 bg-black/90 border border-red-500/50 text-red-400 text-xs px-3 py-2 rounded-xl shadow-2xl flex items-center gap-2 font-sans">
+          <span>⚠️ ระบบ Bot Auto ขัดข้องเล็กน้อย</span>
+          <button
+            type="button"
+            onClick={() => this.setState({ hasError: false })}
+            className="bg-red-500 text-white px-2 py-0.5 rounded text-[10px] font-bold"
+          >
+            รีเซ็ตบอท
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export function LiveDigits(props: {
+  appConfig?: DigitsAppConfig;
+  editMode?: boolean;
+  onSelect?: (key: string) => void;
+  selectedKey?: string | null;
+  rearrangeMode?: boolean;
+  onReorder?: (order: DigitsAppConfig['order']) => void;
+  logoSrc?: string;
+  appName?: string;
+}) {
+  return (
+    <SafeBotBoundary>
+      <LiveDigitsInner {...props} />
+    </SafeBotBoundary>
+  );
+}
+
+function LiveDigitsInner(props: {
   appConfig?: DigitsAppConfig;
   editMode?: boolean;
   onSelect?: (key: string) => void;
@@ -40,149 +91,95 @@ export function LiveDigits(props: {
   const [botStrategy, setBotStrategy] = useState<'OU_QUANT' | 'DIFF_CLUSTER' | 'EVEN_ODD'>('OU_QUANT');
   const [statusLog, setStatusLog] = useState('พร้อมทำงาน');
 
-  // 🛡️ ใช้ useRef เก็บ Flag เพื่อป้องกัน Infinite Re-render Loop
-  const isAutoRef = useRef(false);
-  const isLockRef = useRef(false);
-  const botStrategyRef = useRef<'OU_QUANT' | 'DIFF_CLUSTER' | 'EVEN_ODD'>('OU_QUANT');
   const historyRef = useRef<number[]>([]);
-  const lockTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  // ซิงค์ State เข้า Ref
-  useEffect(() => {
-    isAutoRef.current = isAuto;
-  }, [isAuto]);
-
-  useEffect(() => {
-    botStrategyRef.current = botStrategy;
-  }, [botStrategy]);
+  const isBuyingLockRef = useRef(false);
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // สลับโหมดและเปลี่ยนหมวดสัญญาบน Deriv UI
-  const handleStrategyChange = (newStrategy: 'OU_QUANT' | 'DIFF_CLUSTER' | 'EVEN_ODD') => {
-    setBotStrategy(newStrategy);
-    botStrategyRef.current = newStrategy;
+  // 🧠 MAIN TICK SCANNER ENGINE
+  useEffect(() => {
+    if (!mounted || !isAuto || isBuyingLockRef.current || trading?.isBuying) return;
 
-    try {
-      if (newStrategy === 'OU_QUANT') {
-        trading?.setContractMode?.('OVER_UNDER');
-        trading?.setTradeType?.('DIGITOVER');
-        trading?.setSelectedDigit?.(2);
-      } else if (newStrategy === 'DIFF_CLUSTER') {
-        trading?.setContractMode?.('MATCHES_DIFF');
-        trading?.setTradeType?.('DIGITDIFF');
-        trading?.setSelectedDigit?.(0);
-      } else if (newStrategy === 'EVEN_ODD') {
-        trading?.setContractMode?.('EVEN_ODD');
-        trading?.setTradeType?.('DIGITEVEN');
+    const currentDigit = trading?.lastDigit;
+    if (typeof currentDigit === 'number') {
+      const history = historyRef.current;
+      
+      if (history.length === 0 || history[history.length - 1] !== currentDigit) {
+        history.push(currentDigit);
+        if (history.length > 15) history.shift();
       }
-    } catch (e) {
-      console.warn('Sync mode warning:', e);
+
+      if (history.length >= 5) {
+        const sample = history.slice(-5);
+        const last = sample[sample.length - 1];
+
+        // Strategy 1: Over/Under
+        if (botStrategy === 'OU_QUANT') {
+          const lowCount = sample.filter((d) => d <= 3).length;
+          const highCount = sample.filter((d) => d >= 6).length;
+
+          if (lowCount >= 3 && last >= 2) {
+            executeTrade(2, '🔥 ยิง OVER 2 Signal');
+          } else if (highCount >= 3 && last <= 7) {
+            executeTrade(7, '⚡ ยิง UNDER 7 Signal');
+          }
+        }
+        // Strategy 2: Differ
+        else if (botStrategy === 'DIFF_CLUSTER' && history.length >= 4) {
+          const len = history.length;
+          if (history[len - 3] === history[len - 2] && history[len - 1] !== history[len - 2]) {
+            executeTrade(history[len - 2], `🎯 ยิง DIFFER (${history[len - 2]})`);
+          }
+        }
+        // Strategy 3: Even/Odd
+        else if (botStrategy === 'EVEN_ODD' && history.length >= 6) {
+          const sample6 = history.slice(-6);
+          const evenCount = sample6.filter((d) => d % 2 === 0).length;
+          if (evenCount >= 4) {
+            executeTrade(0, '⚖️ สวนยิง ODD');
+          } else if (6 - evenCount >= 4) {
+            executeTrade(0, '⚖️ สวนยิง EVEN');
+          }
+        }
+      }
     }
-  };
+  }, [trading?.lastDigit, isAuto, mounted, botStrategy]);
 
-  // ฟังก์ชันยิงออเดอร์ปลอดภัย
-  const safeBuy = useCallback((tradeType: string, barrier: number, msg: string) => {
-    if (isLockRef.current) return;
-    
-    isLockRef.current = true;
-    setStatusLog(`${msg} (กำลังยิงออเดอร์...)`);
-
-    // Safety Timeout: หาก 7 วินาทีแล้วยังไม่จบสัญญา ให้บังคับปลดล็อกทันที
-    if (lockTimeoutRef.current) clearTimeout(lockTimeoutRef.current);
-    lockTimeoutRef.current = setTimeout(() => {
-      isLockRef.current = false;
-      setStatusLog('พร้อมสแกนจังหวะถัดไป...');
-    }, 7000);
+  // ฟังก์ชันยิงออเดอร์
+  const executeTrade = (targetDigit: number, logMsg: string) => {
+    isBuyingLockRef.current = true;
+    setStatusLog(logMsg);
 
     try {
-      if (trading?.setTradeType) trading.setTradeType(tradeType);
-      if (trading?.setSelectedDigit) trading.setSelectedDigit(barrier);
+      if (trading?.setSelectedDigit) {
+        trading.setSelectedDigit(targetDigit);
+      }
 
       setTimeout(() => {
         try {
           if (trading?.buyContract) {
             trading.buyContract();
           }
-        } catch (err) {
-          console.error('Buy contract error:', err);
-          isLockRef.current = false;
+        } catch (e) {
+          console.error('Buy Contract error:', e);
         }
-      }, 300);
+      }, 350);
     } catch (e) {
-      console.error('Safe buy error:', e);
-      isLockRef.current = false;
+      console.error('Set digit error:', e);
     }
-  }, [trading]);
+  };
 
-  // 🧠 Tick Listener Loop (ดักจับตัวเลขสด)
-  useEffect(() => {
-    const currentDigit = trading?.lastDigit;
-    if (typeof currentDigit !== 'number' || !isAutoRef.current || isLockRef.current || trading?.isBuying) {
-      return;
-    }
-
-    const history = historyRef.current;
-    if (history.length === 0 || history[history.length - 1] !== currentDigit) {
-      history.push(currentDigit);
-      if (history.length > 15) history.shift();
-    }
-
-    if (history.length >= 5) {
-      const sample = history.slice(-5);
-      const last = sample[sample.length - 1];
-      const currentStrategy = botStrategyRef.current;
-
-      // 1. OVER / UNDER
-      if (currentStrategy === 'OU_QUANT') {
-        const lowCount = sample.filter((d) => d <= 3).length;
-        const highCount = sample.filter((d) => d >= 6).length;
-
-        if (lowCount >= 3 && last >= 2) {
-          safeBuy('DIGITOVER', 2, '🔥 OVER 2 Signal');
-        } else if (highCount >= 3 && last <= 7) {
-          safeBuy('DIGITUNDER', 7, '⚡ UNDER 7 Signal');
-        }
-      }
-      // 2. DIFFER
-      else if (currentStrategy === 'DIFF_CLUSTER' && history.length >= 4) {
-        const len = history.length;
-        if (history[len - 3] === history[len - 2] && history[len - 1] !== history[len - 2]) {
-          const avoidDigit = history[len - 2];
-          safeBuy('DIGITDIFF', avoidDigit, `🎯 DIFFER ${avoidDigit} Signal`);
-        }
-      }
-      // 3. EVEN / ODD
-      else if (currentStrategy === 'EVEN_ODD' && history.length >= 6) {
-        const sample6 = history.slice(-6);
-        const evenCount = sample6.filter((d) => d % 2 === 0).length;
-        if (evenCount >= 4) {
-          safeBuy('DIGITODD', 0, '⚖️ ODD Signal');
-        } else if (6 - evenCount >= 4) {
-          safeBuy('DIGITEVEN', 0, '⚖️ EVEN Signal');
-        }
-      }
-    }
-  }, [trading?.lastDigit, trading?.isBuying, safeBuy]);
-
-  // เคลียร์ผลการเทรดและเตรียมพร้อมตาถัดไป
+  // เคลียร์ล็อกหลังเทรดเสร็จ
   useEffect(() => {
     if (trading?.buyResult || trading?.buyError) {
-      if (trading?.buyError) {
-        setStatusLog(`❌ ล้มเหลว: ${trading.buyError?.message || 'Error'}`);
-      } else if (trading?.buyResult) {
-        setStatusLog('✅ เทรดสำเร็จ!');
-      }
-
       const timer = setTimeout(() => {
         try {
           if (trading?.clearBuyResult) trading.clearBuyResult();
         } catch (e) {}
-
-        if (lockTimeoutRef.current) clearTimeout(lockTimeoutRef.current);
-        isLockRef.current = false;
+        
+        isBuyingLockRef.current = false;
         setStatusLog('พร้อมสแกนตาถัดไป...');
       }, 2000);
 
@@ -192,10 +189,10 @@ export function LiveDigits(props: {
 
   return (
     <div className="relative">
-      {/* 🟢 FLOAT BOT CONTROL */}
+      {/* 🟢 FLOAT BOT CONTROL PANEL */}
       {mounted && !props.editMode && (
         <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-2 font-sans select-none">
-          {/* Live Status */}
+          {/* Status Display */}
           {isAuto && (
             <div className="bg-black/90 text-emerald-400 text-xs px-3.5 py-1.5 rounded-xl border border-emerald-500/40 backdrop-blur-md shadow-2xl flex items-center gap-2 max-w-[280px] truncate">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
@@ -203,7 +200,7 @@ export function LiveDigits(props: {
             </div>
           )}
 
-          {/* Quick Barrier Set */}
+          {/* Quick Barrier Picker */}
           <div className="flex bg-black/90 p-1.5 rounded-xl border border-white/10 backdrop-blur-md gap-1 items-center">
             <span className="text-[10px] text-amber-400 font-bold px-1">Barrier:</span>
             {[2, 3, 6, 7].map((num) => (
@@ -226,11 +223,11 @@ export function LiveDigits(props: {
             ))}
           </div>
 
-          {/* Strategy Mode */}
+          {/* Mode Switcher */}
           <div className="flex bg-black/90 p-1 rounded-xl border border-white/10 backdrop-blur-md gap-1">
             <button
               type="button"
-              onClick={() => handleStrategyChange('OU_QUANT')}
+              onClick={() => setBotStrategy('OU_QUANT')}
               className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
                 botStrategy === 'OU_QUANT' ? 'bg-amber-400 text-black shadow-md' : 'text-gray-400'
               }`}
@@ -239,7 +236,7 @@ export function LiveDigits(props: {
             </button>
             <button
               type="button"
-              onClick={() => handleStrategyChange('DIFF_CLUSTER')}
+              onClick={() => setBotStrategy('DIFF_CLUSTER')}
               className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
                 botStrategy === 'DIFF_CLUSTER' ? 'bg-cyan-400 text-black shadow-md' : 'text-gray-400'
               }`}
@@ -248,7 +245,7 @@ export function LiveDigits(props: {
             </button>
             <button
               type="button"
-              onClick={() => handleStrategyChange('EVEN_ODD')}
+              onClick={() => setBotStrategy('EVEN_ODD')}
               className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
                 botStrategy === 'EVEN_ODD' ? 'bg-purple-400 text-black shadow-md' : 'text-gray-400'
               }`}
@@ -272,7 +269,7 @@ export function LiveDigits(props: {
         </div>
       )}
 
-      {/* Main Deriv Digits Page */}
+      {/* Core Deriv Digit Interface */}
       <DigitsView
         authState={authState}
         accounts={accounts}
