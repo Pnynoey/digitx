@@ -1,11 +1,11 @@
 'use client';
 
 /**
- * Deriv App Builder - Continuous Execution Quant Bot
+ * Deriv App Builder - Anti-Crash Continuous Quant Trading Bot
  * File: components/live-digits.tsx
  */
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useDigitsTrading } from '../hooks/use-digits-trading';
 import { useDerivWSContext } from '@/components/custom/deriv-ws-provider';
 import { useLogoSrc } from '@/components/custom/logo-src-provider';
@@ -39,148 +39,152 @@ export function LiveDigits(props: {
   const [isAuto, setIsAuto] = useState(false);
   const [botStrategy, setBotStrategy] = useState<'OU_QUANT' | 'DIFF_CLUSTER' | 'EVEN_ODD'>('OU_QUANT');
   const [statusLog, setStatusLog] = useState('พร้อมทำงาน');
-  const [isLock, setIsLock] = useState(false);
 
+  // 🛡️ ใช้ useRef เก็บ Flag เพื่อป้องกัน Infinite Re-render Loop
+  const isAutoRef = useRef(false);
+  const isLockRef = useRef(false);
+  const botStrategyRef = useRef<'OU_QUANT' | 'DIFF_CLUSTER' | 'EVEN_ODD'>('OU_QUANT');
   const historyRef = useRef<number[]>([]);
   const lockTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // ซิงค์ State เข้า Ref
+  useEffect(() => {
+    isAutoRef.current = isAuto;
+  }, [isAuto]);
+
+  useEffect(() => {
+    botStrategyRef.current = botStrategy;
+  }, [botStrategy]);
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // สลับโหมดการเทรดบน UI
+  // สลับโหมดและเปลี่ยนหมวดสัญญาบน Deriv UI
   const handleStrategyChange = (newStrategy: 'OU_QUANT' | 'DIFF_CLUSTER' | 'EVEN_ODD') => {
     setBotStrategy(newStrategy);
+    botStrategyRef.current = newStrategy;
+
     try {
       if (newStrategy === 'OU_QUANT') {
-        if (trading?.setContractMode) trading.setContractMode('OVER_UNDER');
-        if (trading?.setTradeType) trading.setTradeType('DIGITOVER');
-        if (trading?.setSelectedDigit) trading.setSelectedDigit(2);
+        trading?.setContractMode?.('OVER_UNDER');
+        trading?.setTradeType?.('DIGITOVER');
+        trading?.setSelectedDigit?.(2);
       } else if (newStrategy === 'DIFF_CLUSTER') {
-        if (trading?.setContractMode) trading.setContractMode('MATCHES_DIFF');
-        if (trading?.setTradeType) trading.setTradeType('DIGITDIFF');
-        if (trading?.setSelectedDigit) trading.setSelectedDigit(0);
+        trading?.setContractMode?.('MATCHES_DIFF');
+        trading?.setTradeType?.('DIGITDIFF');
+        trading?.setSelectedDigit?.(0);
       } else if (newStrategy === 'EVEN_ODD') {
-        if (trading?.setContractMode) trading.setContractMode('EVEN_ODD');
-        if (trading?.setTradeType) trading.setTradeType('DIGITEVEN');
+        trading?.setContractMode?.('EVEN_ODD');
+        trading?.setTradeType?.('DIGITEVEN');
       }
     } catch (e) {
-      console.warn('Mode change sync notice:', e);
+      console.warn('Sync mode warning:', e);
     }
   };
 
-  // Main Loop สแกน Ticks
-  useEffect(() => {
-    // หากติด Lock หรือกำลังกดซื้ออยู่ จะข้ามการวิเคราะห์ไปก่อน
-    if (!mounted || !isAuto || isLock || trading?.isBuying) return;
+  // ฟังก์ชันยิงออเดอร์ปลอดภัย
+  const safeBuy = useCallback((tradeType: string, barrier: number, msg: string) => {
+    if (isLockRef.current) return;
+    
+    isLockRef.current = true;
+    setStatusLog(`${msg} (กำลังยิงออเดอร์...)`);
 
-    const currentDigit = trading?.lastDigit;
-    if (typeof currentDigit === 'number') {
-      const history = historyRef.current;
-      if (history.length === 0 || history[history.length - 1] !== currentDigit) {
-        history.push(currentDigit);
-        if (history.length > 15) history.shift();
-      }
-
-      if (history.length >= 5) {
-        const sample = history.slice(-5);
-        const last = sample[sample.length - 1];
-
-        // 🧠 Strategy 1: Over / Under
-        if (botStrategy === 'OU_QUANT') {
-          const lowCount = sample.filter((d) => d <= 3).length;
-          const highCount = sample.filter((d) => d >= 6).length;
-
-          if (lowCount >= 3 && last >= 2) {
-            safeBuy('DIGITOVER', 2, '🔥 OVER 2 Signal');
-          } else if (highCount >= 3 && last <= 7) {
-            safeBuy('DIGITUNDER', 7, '⚡ UNDER 7 Signal');
-          }
-        }
-        // 🧠 Strategy 2: Differ
-        else if (botStrategy === 'DIFF_CLUSTER' && history.length >= 4) {
-          const len = history.length;
-          if (history[len - 3] === history[len - 2] && history[len - 1] !== history[len - 2]) {
-            const avoidDigit = history[len - 2];
-            safeBuy('DIGITDIFF', avoidDigit, `🎯 DIFFER ${avoidDigit} Signal`);
-          }
-        }
-        // 🧠 Strategy 3: Even / Odd
-        else if (botStrategy === 'EVEN_ODD' && history.length >= 6) {
-          const sample6 = history.slice(-6);
-          const evenCount = sample6.filter((d) => d % 2 === 0).length;
-          if (evenCount >= 4) {
-            safeBuy('DIGITODD', 0, '⚖️ ODD Signal');
-          } else if (6 - evenCount >= 4) {
-            safeBuy('DIGITEVEN', 0, '⚖️ EVEN Signal');
-          }
-        }
-      }
-    }
-  }, [trading?.lastDigit, isAuto, isLock, trading?.isBuying, botStrategy, mounted]);
-
-  // ฟังก์ชันสั่งซื้อและจัดการเรื่อง Timeout ปลดล็อก
-  const safeBuy = (tradeType: string, barrier: number, msg: string) => {
-    setIsLock(true);
-    setStatusLog(`${msg} (กำลังเตรียมออเดอร์...)`);
-
-    // 🛡️ Safety Timer: ถ้าผ่านไป 8 วินาทีแล้วยังไม่ปลดล็อก ให้บังคับ Reset ทันที (ป้องกันบอทค้าง)
+    // Safety Timeout: หาก 7 วินาทีแล้วยังไม่จบสัญญา ให้บังคับปลดล็อกทันที
     if (lockTimeoutRef.current) clearTimeout(lockTimeoutRef.current);
     lockTimeoutRef.current = setTimeout(() => {
-      console.warn('Safety Unlock Triggered');
-      setIsLock(false);
-      setStatusLog('พร้อมสแกนหาจังหวะใหม่...');
-    }, 8000);
+      isLockRef.current = false;
+      setStatusLog('พร้อมสแกนจังหวะถัดไป...');
+    }, 7000);
 
     try {
       if (trading?.setTradeType) trading.setTradeType(tradeType);
       if (trading?.setSelectedDigit) trading.setSelectedDigit(barrier);
 
-      let attempts = 0;
-      const maxAttempts = 10;
-
-      const checkAndBuy = setInterval(() => {
-        attempts++;
-        const hasProposal = !!trading?.proposal && !trading?.isProposalLoading;
-        
-        if (hasProposal || attempts >= maxAttempts) {
-          clearInterval(checkAndBuy);
-          try {
-            if (trading?.buyContract) {
-              setStatusLog(`${msg} 🚀 ยิงคำสั่งซื้อแล้ว!`);
-              trading.buyContract();
-            }
-          } catch (err) {
-            console.error('Execution Buy Failure:', err);
-            setStatusLog('⚠️ ส่งออเดอร์ไม่สำเร็จ');
-            setIsLock(false);
+      setTimeout(() => {
+        try {
+          if (trading?.buyContract) {
+            trading.buyContract();
           }
+        } catch (err) {
+          console.error('Buy contract error:', err);
+          isLockRef.current = false;
         }
-      }, 100);
+      }, 300);
     } catch (e) {
-      console.error('Safe setup failed:', e);
-      setIsLock(false);
+      console.error('Safe buy error:', e);
+      isLockRef.current = false;
     }
-  };
+  }, [trading]);
 
-  // เคลียร์ผลการเทรดและปลดล็อกเมื่อทราบผลลัพธ์
+  // 🧠 Tick Listener Loop (ดักจับตัวเลขสด)
+  useEffect(() => {
+    const currentDigit = trading?.lastDigit;
+    if (typeof currentDigit !== 'number' || !isAutoRef.current || isLockRef.current || trading?.isBuying) {
+      return;
+    }
+
+    const history = historyRef.current;
+    if (history.length === 0 || history[history.length - 1] !== currentDigit) {
+      history.push(currentDigit);
+      if (history.length > 15) history.shift();
+    }
+
+    if (history.length >= 5) {
+      const sample = history.slice(-5);
+      const last = sample[sample.length - 1];
+      const currentStrategy = botStrategyRef.current;
+
+      // 1. OVER / UNDER
+      if (currentStrategy === 'OU_QUANT') {
+        const lowCount = sample.filter((d) => d <= 3).length;
+        const highCount = sample.filter((d) => d >= 6).length;
+
+        if (lowCount >= 3 && last >= 2) {
+          safeBuy('DIGITOVER', 2, '🔥 OVER 2 Signal');
+        } else if (highCount >= 3 && last <= 7) {
+          safeBuy('DIGITUNDER', 7, '⚡ UNDER 7 Signal');
+        }
+      }
+      // 2. DIFFER
+      else if (currentStrategy === 'DIFF_CLUSTER' && history.length >= 4) {
+        const len = history.length;
+        if (history[len - 3] === history[len - 2] && history[len - 1] !== history[len - 2]) {
+          const avoidDigit = history[len - 2];
+          safeBuy('DIGITDIFF', avoidDigit, `🎯 DIFFER ${avoidDigit} Signal`);
+        }
+      }
+      // 3. EVEN / ODD
+      else if (currentStrategy === 'EVEN_ODD' && history.length >= 6) {
+        const sample6 = history.slice(-6);
+        const evenCount = sample6.filter((d) => d % 2 === 0).length;
+        if (evenCount >= 4) {
+          safeBuy('DIGITODD', 0, '⚖️ ODD Signal');
+        } else if (6 - evenCount >= 4) {
+          safeBuy('DIGITEVEN', 0, '⚖️ EVEN Signal');
+        }
+      }
+    }
+  }, [trading?.lastDigit, trading?.isBuying, safeBuy]);
+
+  // เคลียร์ผลการเทรดและเตรียมพร้อมตาถัดไป
   useEffect(() => {
     if (trading?.buyResult || trading?.buyError) {
       if (trading?.buyError) {
-        setStatusLog(`❌ เทรดล้มเหลว: ${trading.buyError?.message || 'Unknown Error'}`);
+        setStatusLog(`❌ ล้มเหลว: ${trading.buyError?.message || 'Error'}`);
       } else if (trading?.buyResult) {
-        setStatusLog('✅ ส่งคำสั่งเทรดสำเร็จ!');
+        setStatusLog('✅ เทรดสำเร็จ!');
       }
 
       const timer = setTimeout(() => {
         try {
           if (trading?.clearBuyResult) trading.clearBuyResult();
         } catch (e) {}
-        
+
         if (lockTimeoutRef.current) clearTimeout(lockTimeoutRef.current);
-        setIsLock(false);
+        isLockRef.current = false;
         setStatusLog('พร้อมสแกนตาถัดไป...');
-      }, 2500);
+      }, 2000);
 
       return () => clearTimeout(timer);
     }
