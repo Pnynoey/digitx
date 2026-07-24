@@ -1,7 +1,8 @@
 'use client';
 
 /**
- * Deriv App Builder - Safe Quant Bot Component (Isolated UI Architecture)
+ * Deriv App Builder - Complete & Isolated Quant Trading Bot
+ * File: components/live-digits.tsx
  */
 
 import React, { useEffect, useState, useRef } from 'react';
@@ -12,28 +13,28 @@ import { DigitsView } from './digits-view';
 import type { DigitsAppConfig } from '../lib/app-config';
 
 // ------------------------------------------------------------------
-// 🎛️ ISOLATED BOT CONTROLLER (แยกการทำงานออกมาเพื่อความปลอดภัย)
+// 🎛️ ISOLATED BOT CONTROLLER ENGINE (ตัวควบคุมระบบออโต้เทรด)
 // ------------------------------------------------------------------
 function BotController({ trading }: { trading: any }) {
-  const [isAuto, setIsAuto] = useState(false);
+  const [isAuto, setIsAuto] = useState<boolean>(false);
   const [botStrategy, setBotStrategy] = useState<'OU_QUANT' | 'DIFF_CLUSTER' | 'EVEN_ODD'>('OU_QUANT');
-  const [isTradingLock, setIsTradingLock] = useState(false);
-  const [statusLog, setStatusLog] = useState('พร้อมใช้งาน');
+  const [isTradingLock, setIsTradingLock] = useState<boolean>(false);
+  const [statusLog, setStatusLog] = useState<string>('ระบบพร้อมทำงาน');
 
   const historyRef = useRef<number[]>([]);
 
-  // ซิงค์การเปลี่ยน Barrier
+  // 🎯 ฟังก์ชันซิงค์ปุ่ม Barrier กับ Deriv UI โดยตรง
   const handleSyncBarrier = (digit: number) => {
     try {
-      if (trading?.setSelectedDigit) {
+      if (trading && typeof trading.setSelectedDigit === 'function') {
         trading.setSelectedDigit(digit);
       }
     } catch (e) {
-      console.warn('Sync barrier warning:', e);
+      console.warn('Sync barrier notice:', e);
     }
   };
 
-  // Loop ประมวลผล Ticks
+  // 🧠 MAIN ENGINE LOOP: ประมวลผล Ticks และยิงออเดอร์
   useEffect(() => {
     if (!isAuto || isTradingLock || trading?.isBuying) return;
 
@@ -41,49 +42,66 @@ function BotController({ trading }: { trading: any }) {
     if (lastDigit !== undefined && lastDigit !== null) {
       const history = historyRef.current;
       
-      // ป้องกันการอัปเดตเลขซ้ำ
-      if (history[history.length - 1] !== lastDigit) {
+      // อัปเดตข้อมูล Ticks ย้อนหลัง
+      if (history.length === 0 || history[history.length - 1] !== lastDigit) {
         history.push(lastDigit);
         if (history.length > 15) history.shift();
       }
 
+      // เช็คว่ามีสถิติเพียงพอในการวิเคราะห์ (5 ตาขึ้นไป)
       if (history.length >= 5) {
         const sample = history.slice(-5);
-        const current = sample[sample.length - 1];
+        const currentDigit = sample[sample.length - 1];
 
-        // 🧠 STRATEGY 1: OVER / UNDER
+        // -----------------------------------------------------------
+        // 1. STRATEGY: OVER / UNDER QUANT ENGINE
+        // -----------------------------------------------------------
         if (botStrategy === 'OU_QUANT') {
-          const lowCount = sample.filter(d => d <= 3).length;
-          const highCount = sample.filter(d => d >= 6).length;
+          const lowCount = sample.filter((d) => d <= 3).length;
+          const highCount = sample.filter((d) => d >= 6).length;
 
-          if (lowCount >= 3 && current >= 2) {
-            executeTrade('DIGITOVER', 2, 'OVER_UNDER', '🔥 ยิง OVER 2');
-          } else if (highCount >= 3 && current <= 7) {
-            executeTrade('DIGITUNDER', 7, 'OVER_UNDER', '⚡ ยิง UNDER 7');
+          // เงื่อนไข OVER 2 (เมื่อเลขอัดอยู่โซนต่ำ แล้วเริ่มดีดตัวขึ้น)
+          if (lowCount >= 3 && currentDigit >= 2) {
+            executeTrade('DIGITOVER', 2, 'OVER_UNDER', '🔥 ยิง OVER 2 (Low Cluster)');
+          } 
+          // เงื่อนไข UNDER 7 (เมื่อเลขอัดอยู่โซนสูง แล้วเริ่มหักหัวลง)
+          else if (highCount >= 3 && currentDigit <= 7) {
+            executeTrade('DIGITUNDER', 7, 'OVER_UNDER', '⚡ ยิง UNDER 7 (High Cluster)');
           }
         }
-        // 🧠 STRATEGY 2: DIFFER
+        // -----------------------------------------------------------
+        // 2. STRATEGY: DIFFER CLUSTER ANTI-SIPHON
+        // -----------------------------------------------------------
         else if (botStrategy === 'DIFF_CLUSTER' && history.length >= 4) {
           const len = history.length;
-          if (history[len - 3] === history[len - 2] && history[len - 1] !== history[len - 2]) {
-            executeTrade('DIGITDIFF', history[len - 2], 'MATCHES_DIFF', `🎯 ยิง DIFFER (${history[len - 2]})`);
+          const d1 = history[len - 1];
+          const d2 = history[len - 2];
+          const d3 = history[len - 3];
+
+          // ซ้ำติดกัน 2 ตา แล้วโดนขัดจังหวะด้วยเลขต่างกลุ่ม
+          if (d3 === d2 && d1 !== d2) {
+            executeTrade('DIGITDIFF', d2, 'MATCHES_DIFF', `🎯 ยิง DIFFER (ห้ามออก ${d2})`);
           }
         }
-        // 🧠 STRATEGY 3: EVEN / ODD
+        // -----------------------------------------------------------
+        // 3. STRATEGY: EVEN / ODD POISSON EQUILIBRIUM
+        // -----------------------------------------------------------
         else if (botStrategy === 'EVEN_ODD' && history.length >= 6) {
           const sample6 = history.slice(-6);
-          const evenCount = sample6.filter(d => d % 2 === 0).length;
+          const evenCount = sample6.filter((d) => d % 2 === 0).length;
+          const oddCount = 6 - evenCount;
+
           if (evenCount >= 4) {
-            executeTrade('DIGITODD', 0, 'EVEN_ODD', '⚖️ สวนยิง ODD');
-          } else if ((6 - evenCount) >= 4) {
-            executeTrade('DIGITEVEN', 0, 'EVEN_ODD', '⚖️ สวนยิง EVEN');
+            executeTrade('DIGITODD', 0, 'EVEN_ODD', '⚖️ สวนยิง ODD (Even Overbought)');
+          } else if (oddCount >= 4) {
+            executeTrade('DIGITEVEN', 0, 'EVEN_ODD', '⚖️ สวนยิง EVEN (Odd Overbought)');
           }
         }
       }
     }
   }, [trading?.lastDigit, isAuto, isTradingLock, trading?.isBuying, botStrategy]);
 
-  // ฟังก์ชันยิงออเดอร์
+  // 🚀 ฟังก์ชันส่งคำสั่งเทรดแบบซิงค์ UI
   const executeTrade = (tradeType: string, barrier: number, contractMode: string, msg: string) => {
     setIsTradingLock(true);
     setStatusLog(msg);
@@ -103,11 +121,13 @@ function BotController({ trading }: { trading: any }) {
     }
   };
 
-  // ปลดล็อกระบบ
+  // 🔓 ปลดล็อกระบบหลังจบสัญญา
   useEffect(() => {
     if (trading?.buyResult || trading?.buyError) {
       const timer = setTimeout(() => {
-        if (trading?.clearBuyResult) trading.clearBuyResult();
+        if (trading?.clearBuyResult) {
+          trading.clearBuyResult();
+        }
         setIsTradingLock(false);
       }, 2000);
       return () => clearTimeout(timer);
@@ -124,7 +144,7 @@ function BotController({ trading }: { trading: any }) {
         </div>
       )}
 
-      {/* Sync Barrier Test Buttons */}
+      {/* Sync Barrier Quick Buttons */}
       <div className="flex bg-black/90 p-1.5 rounded-xl border border-white/10 backdrop-blur-md gap-1 items-center">
         <span className="text-[10px] text-amber-400 font-bold px-1">Deriv Barrier:</span>
         {[2, 3, 6, 7].map((num) => (
@@ -174,7 +194,7 @@ function BotController({ trading }: { trading: any }) {
         </button>
       </div>
 
-      {/* Main Button */}
+      {/* Main Start/Stop Button */}
       <button
         type="button"
         onClick={() => setIsAuto(!isAuto)}
@@ -191,7 +211,7 @@ function BotController({ trading }: { trading: any }) {
 }
 
 // ------------------------------------------------------------------
-// MAIN COMPONENT
+// MAIN LIVE DIGITS EXPORT COMPONENT
 // ------------------------------------------------------------------
 export function LiveDigits(props: {
   appConfig?: DigitsAppConfig;
@@ -216,14 +236,14 @@ export function LiveDigits(props: {
     onAuthWSFailed: logout,
   });
 
-  const [mounted, setMounted] = useState(false);
+  const [mounted, setMounted] = useState<boolean>(false);
   useEffect(() => {
     setMounted(true);
   }, []);
 
   return (
     <div className="relative">
-      {/* โหลด Bot Controller เฉพาะเมื่อพร้อมใช้งานบน Client เท่านั้น */}
+      {/* โหลด BotController เฉพาะเมื่อ Render บน Client เสร็จสิ้นเรียบร้อย */}
       {mounted && !props.editMode && <BotController trading={trading} />}
 
       <DigitsView
