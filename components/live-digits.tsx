@@ -1,10 +1,8 @@
 'use client';
 
 /**
- * Deriv App Builder - Complete & Robust Quant Trading Bot
+ * Deriv App Builder - Continuous Execution Quant Bot
  * File: components/live-digits.tsx
- *
- * Automatically synced with active UI contract modes and proposal readiness.
  */
 
 import React, { useEffect, useState, useRef } from 'react';
@@ -29,7 +27,7 @@ export function LiveDigits(props: {
   const { ws, isConnected, isExhausted, auth } = useDerivWSContext();
   const { authState, accounts, activeAccount, login, signUp, logout, switchAccount } = auth;
 
-  const trading = useDigitsTrading({
+  const trading: any = useDigitsTrading({
     ws,
     isConnected,
     isExhausted,
@@ -44,34 +42,36 @@ export function LiveDigits(props: {
   const [isLock, setIsLock] = useState(false);
 
   const historyRef = useRef<number[]>([]);
+  const lockTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // Sync state between Bot strategy selection and UI Mode
+  // สลับโหมดการเทรดบน UI
   const handleStrategyChange = (newStrategy: 'OU_QUANT' | 'DIFF_CLUSTER' | 'EVEN_ODD') => {
     setBotStrategy(newStrategy);
     try {
       if (newStrategy === 'OU_QUANT') {
-        trading?.setContractMode?.('OVER_UNDER' as any);
-        trading?.setTradeType?.('DIGITOVER' as any);
-        trading?.setSelectedDigit?.(2);
+        if (trading?.setContractMode) trading.setContractMode('OVER_UNDER');
+        if (trading?.setTradeType) trading.setTradeType('DIGITOVER');
+        if (trading?.setSelectedDigit) trading.setSelectedDigit(2);
       } else if (newStrategy === 'DIFF_CLUSTER') {
-        trading?.setContractMode?.('MATCHES_DIFF' as any);
-        trading?.setTradeType?.('DIGITDIFF' as any);
-        trading?.setSelectedDigit?.(0);
+        if (trading?.setContractMode) trading.setContractMode('MATCHES_DIFF');
+        if (trading?.setTradeType) trading.setTradeType('DIGITDIFF');
+        if (trading?.setSelectedDigit) trading.setSelectedDigit(0);
       } else if (newStrategy === 'EVEN_ODD') {
-        trading?.setContractMode?.('EVEN_ODD' as any);
-        trading?.setTradeType?.('DIGITEVEN' as any);
+        if (trading?.setContractMode) trading.setContractMode('EVEN_ODD');
+        if (trading?.setTradeType) trading.setTradeType('DIGITEVEN');
       }
     } catch (e) {
       console.warn('Mode change sync notice:', e);
     }
   };
 
-  // Main tick monitoring loop
+  // Main Loop สแกน Ticks
   useEffect(() => {
+    // หากติด Lock หรือกำลังกดซื้ออยู่ จะข้ามการวิเคราะห์ไปก่อน
     if (!mounted || !isAuto || isLock || trading?.isBuying) return;
 
     const currentDigit = trading?.lastDigit;
@@ -119,35 +119,40 @@ export function LiveDigits(props: {
     }
   }, [trading?.lastDigit, isAuto, isLock, trading?.isBuying, botStrategy, mounted]);
 
-  // Robust purchase function waiting for proposal readiness
+  // ฟังก์ชันสั่งซื้อและจัดการเรื่อง Timeout ปลดล็อก
   const safeBuy = (tradeType: string, barrier: number, msg: string) => {
     setIsLock(true);
-    setStatusLog(`${msg} (กำลังเตรียม Proposal...)`);
+    setStatusLog(`${msg} (กำลังเตรียมออเดอร์...)`);
+
+    // 🛡️ Safety Timer: ถ้าผ่านไป 8 วินาทีแล้วยังไม่ปลดล็อก ให้บังคับ Reset ทันที (ป้องกันบอทค้าง)
+    if (lockTimeoutRef.current) clearTimeout(lockTimeoutRef.current);
+    lockTimeoutRef.current = setTimeout(() => {
+      console.warn('Safety Unlock Triggered');
+      setIsLock(false);
+      setStatusLog('พร้อมสแกนหาจังหวะใหม่...');
+    }, 8000);
 
     try {
-      // 1. Update contract types and barrier
-      if (trading?.setTradeType) trading.setTradeType(tradeType as any);
+      if (trading?.setTradeType) trading.setTradeType(tradeType);
       if (trading?.setSelectedDigit) trading.setSelectedDigit(barrier);
 
-      // 2. Wait for proposal to resolve properly before buying
       let attempts = 0;
-      const maxAttempts = 15; // Wait up to ~1.5s max
+      const maxAttempts = 10;
 
       const checkAndBuy = setInterval(() => {
         attempts++;
-        
         const hasProposal = !!trading?.proposal && !trading?.isProposalLoading;
         
         if (hasProposal || attempts >= maxAttempts) {
           clearInterval(checkAndBuy);
           try {
             if (trading?.buyContract) {
-              setStatusLog(`${msg} 🚀 กำลังส่งคำสั่งเทรด!`);
+              setStatusLog(`${msg} 🚀 ยิงคำสั่งซื้อแล้ว!`);
               trading.buyContract();
             }
           } catch (err) {
             console.error('Execution Buy Failure:', err);
-            setStatusLog('⚠️ เกิดข้อผิดพลาดในการส่งคำสั่ง');
+            setStatusLog('⚠️ ส่งออเดอร์ไม่สำเร็จ');
             setIsLock(false);
           }
         }
@@ -158,11 +163,11 @@ export function LiveDigits(props: {
     }
   };
 
-  // Reset lock state when trade finishes or errors
+  // เคลียร์ผลการเทรดและปลดล็อกเมื่อทราบผลลัพธ์
   useEffect(() => {
     if (trading?.buyResult || trading?.buyError) {
       if (trading?.buyError) {
-        setStatusLog(`❌ เทรดล้มเหลว: ${trading.buyError.message || 'Unknown Error'}`);
+        setStatusLog(`❌ เทรดล้มเหลว: ${trading.buyError?.message || 'Unknown Error'}`);
       } else if (trading?.buyResult) {
         setStatusLog('✅ ส่งคำสั่งเทรดสำเร็จ!');
       }
@@ -171,8 +176,12 @@ export function LiveDigits(props: {
         try {
           if (trading?.clearBuyResult) trading.clearBuyResult();
         } catch (e) {}
+        
+        if (lockTimeoutRef.current) clearTimeout(lockTimeoutRef.current);
         setIsLock(false);
-      }, 2200);
+        setStatusLog('พร้อมสแกนตาถัดไป...');
+      }, 2500);
+
       return () => clearTimeout(timer);
     }
   }, [trading?.buyResult, trading?.buyError]);
