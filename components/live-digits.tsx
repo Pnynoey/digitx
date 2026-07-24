@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Institutional Quant Digits AI Engine - With Visual Barrier Selector
+ * Institutional Quant Digits AI Engine - Ultra Safe Hydration Version
  */
 
 import { useEffect, useState, useRef } from 'react';
@@ -30,6 +30,7 @@ export function LiveDigits({
   logoSrc?: string;
   appName?: string;
 }) {
+  const [isMounted, setIsMounted] = useState(false);
   const providerLogo = useLogoSrc();
   const logoSrc = logoSrcOverride ?? providerLogo;
   const { ws, isConnected, isExhausted, auth } = useDerivWSContext();
@@ -49,16 +50,22 @@ export function LiveDigits({
   const [isAuto, setIsAuto] = useState<boolean>(false);
   const [botStrategy, setBotStrategy] = useState<'OU_QUANT' | 'DIFF_CLUSTER' | 'EVEN_ODD'>('OU_QUANT');
   
-  // 🎯 เพิ่มตัวแปรให้ผู้ใช้เลือก Barrier เลข Over / Under / Differ ได้เองตามใจชอบ
-  const [overBarrier, setOverBarrier] = useState<number>(2);   // ค่าเริ่มต้น Over 2 (ชนะ 3-9)
-  const [underBarrier, setUnderBarrier] = useState<number>(7); // ค่าเริ่มต้น Under 7 (ชนะ 0-6)
+  const [overBarrier, setOverBarrier] = useState<number>(2);   // Over 2 (ชนะ 3-9)
+  const [underBarrier, setUnderBarrier] = useState<number>(7); // Under 7 (ชนะ 0-6)
   
   const [isTradingLock, setIsTradingLock] = useState<boolean>(false);
   const [lastSignalLog, setLastSignalLog] = useState<string>('พร้อมรันระบบ...');
   const tickHistoryRef = useRef<number[]>([]);
 
+  // ป้องกัน Hydration Error
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
   // 1. WebSocket Main Execution Loop
   useEffect(() => {
+    if (!isMounted) return;
+
     if (trading.lastDigit !== undefined && trading.lastDigit !== null) {
       const history = tickHistoryRef.current;
       history.push(trading.lastDigit);
@@ -66,28 +73,22 @@ export function LiveDigits({
 
       if (isAuto && !isTradingLock && !trading.isBuying && history.length >= 5) {
         
-        // ===========================================================
-        // 🧠 STRATEGY 1: OVER / UNDER (Fast Signal Mode)
-        // ===========================================================
+        // 🧠 STRATEGY 1: OVER / UNDER
         if (botStrategy === 'OU_QUANT') {
           const sample = history.slice(-5);
           const lastDigit = sample[sample.length - 1];
           const lowDigitsCount = sample.filter(d => d <= 3).length;
           const highDigitsCount = sample.filter(d => d >= 6).length;
 
-          // 🎯 ยิง OVER ตามเลข Barrier ที่ตั้งไว้
           if (lowDigitsCount >= 3 && lastDigit >= 2) {
-            triggerTrade('DIGITOVER', overBarrier, `🔥 OVER ${overBarrier} Trigger (Low Cluster: ${lowDigitsCount}/5)`);
+            triggerTrade('DIGITOVER', overBarrier, `🔥 OVER ${overBarrier} Trigger`);
           } 
-          // 🎯 ยิง UNDER ตามเลข Barrier ที่ตั้งไว้
           else if (highDigitsCount >= 3 && lastDigit <= 7) {
-            triggerTrade('DIGITUNDER', underBarrier, `⚡ UNDER ${underBarrier} Trigger (High Cluster: ${highDigitsCount}/5)`);
+            triggerTrade('DIGITUNDER', underBarrier, `⚡ UNDER ${underBarrier} Trigger`);
           }
         } 
 
-        // ===========================================================
-        // 🧠 STRATEGY 2: DIFFER (Cluster Anti-Siphon)
-        // ===========================================================
+        // 🧠 STRATEGY 2: DIFFER
         else if (botStrategy === 'DIFF_CLUSTER' && history.length >= 4) {
           const len = history.length;
           const d1 = history[len - 1];
@@ -95,33 +96,30 @@ export function LiveDigits({
           const d3 = history[len - 3];
 
           if (d3 === d2 && d1 !== d2) {
-            triggerTrade('DIGITDIFF', d2, `🎯 Differ Trigger (Avoid Digit: ${d2})`);
+            triggerTrade('DIGITDIFF', d2, `🎯 Differ Trigger (Avoid: ${d2})`);
           }
         }
 
-        // ===========================================================
-        // 🧠 STRATEGY 3: EVEN / ODD (Fast Reversion)
-        // ===========================================================
+        // 🧠 STRATEGY 3: EVEN / ODD
         else if (botStrategy === 'EVEN_ODD' && history.length >= 6) {
           const sample = history.slice(-6);
           const evenCount = sample.filter(d => d % 2 === 0).length;
           const oddCount = 6 - evenCount;
 
           if (evenCount >= 4) {
-            triggerTrade('DIGITODD', 0, `⚖️ EVEN/ODD: Bet ODD (Even Out: ${evenCount}/6)`);
+            triggerTrade('DIGITODD', 0, `⚖️ Bet ODD`);
           } else if (oddCount >= 4) {
-            triggerTrade('DIGITEVEN', 0, `⚖️ EVEN/ODD: Bet EVEN (Odd Out: ${oddCount}/6)`);
+            triggerTrade('DIGITEVEN', 0, `⚖️ Bet EVEN`);
           }
         }
       }
     }
-  }, [trading.lastDigit, isAuto, isTradingLock, trading.isBuying, botStrategy, overBarrier, underBarrier]);
+  }, [trading.lastDigit, isAuto, isTradingLock, trading.isBuying, botStrategy, overBarrier, underBarrier, isMounted]);
 
-  // ฟังก์ชันยิงออเดอร์
+  // Execute Order
   const triggerTrade = (tradeType: string, barrier: number, logMsg: string) => {
     setIsTradingLock(true);
     setLastSignalLog(logMsg);
-    console.log(`[QUANT AI] ${logMsg}`);
 
     try {
       if (trading.setSelectedDigit) trading.setSelectedDigit(barrier);
@@ -141,7 +139,7 @@ export function LiveDigits({
     }, 300);
   };
 
-  // ปลดล็อกระบบเมื่อเทรดจบตา
+  // Release Lock
   useEffect(() => {
     if (trading.buyResult || trading.buyError) {
       const timer = setTimeout(() => {
@@ -154,10 +152,10 @@ export function LiveDigits({
 
   return (
     <div className="relative">
-      {/* 🟢 QUANT CONTROL HUB (มุมขวาล่าง) */}
-      {!editMode && (
+      {/* 🟢 QUANT CONTROL HUB */}
+      {isMounted && !editMode && (
         <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-2">
-          {/* Status Live Indicator */}
+          {/* Status Indicator */}
           {isAuto && (
             <div className="bg-black/90 text-emerald-400 text-xs font-mono px-3 py-1.5 rounded-lg border border-emerald-500/40 backdrop-blur-md shadow-xl flex items-center gap-2 max-w-[320px] truncate">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
@@ -165,34 +163,30 @@ export function LiveDigits({
             </div>
           )}
 
-          {/* 🎛️ แผงปรับเลือก BARRIER OVER / UNDER โชว์เด่นบน UI */}
+          {/* Target Barrier Selector Panel */}
           {botStrategy === 'OU_QUANT' && (
-            <div className="flex items-center gap-2 bg-black/90 p-2 rounded-xl border border-amber-500/30 backdrop-blur-md shadow-2xl text-xs font-bold">
-              <span className="text-amber-400">Target Barrier:</span>
+            <div className="flex items-center gap-3 bg-black/90 px-3 py-2 rounded-xl border border-amber-500/30 backdrop-blur-md shadow-2xl text-xs font-bold">
+              <span className="text-amber-400">Barrier:</span>
               <div className="flex items-center gap-1">
-                <span className="text-gray-300">Over &gt;</span>
-                <select
-                  value={overBarrier}
-                  onChange={(e) => setOverBarrier(Number(e.target.value))}
-                  className="bg-gray-800 text-emerald-400 font-bold px-2 py-1 rounded border border-gray-600 focus:outline-none"
+                <span className="text-emerald-400">Over &gt;</span>
+                <button
+                  type="button"
+                  onClick={() => setOverBarrier((prev) => (prev >= 5 ? 0 : prev + 1))}
+                  className="bg-gray-800 hover:bg-gray-700 text-emerald-400 font-black px-2.5 py-1 rounded border border-emerald-500/40"
                 >
-                  {[0, 1, 2, 3, 4, 5].map(n => (
-                    <option key={n} value={n}>{n}</option>
-                  ))}
-                </select>
+                  {overBarrier}
+                </button>
               </div>
 
-              <div className="flex items-center gap-1 ml-2">
-                <span className="text-gray-300">Under &lt;</span>
-                <select
-                  value={underBarrier}
-                  onChange={(e) => setUnderBarrier(Number(e.target.value))}
-                  className="bg-gray-800 text-rose-400 font-bold px-2 py-1 rounded border border-gray-600 focus:outline-none"
+              <div className="flex items-center gap-1">
+                <span className="text-rose-400">Under &lt;</span>
+                <button
+                  type="button"
+                  onClick={() => setUnderBarrier((prev) => (prev <= 4 ? 9 : prev - 1))}
+                  className="bg-gray-800 hover:bg-gray-700 text-rose-400 font-black px-2.5 py-1 rounded border border-rose-500/40"
                 >
-                  {[4, 5, 6, 7, 8, 9].map(n => (
-                    <option key={n} value={n}>{n}</option>
-                  ))}
-                </select>
+                  {underBarrier}
+                </button>
               </div>
             </div>
           )}
