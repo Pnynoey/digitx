@@ -1,18 +1,67 @@
 'use client';
 
 /**
- * Deriv App Builder - Synchronized Quant Auto Bot Component
- * Fully reactive to Deriv Native UI Controls & Zero-Hydration-Crash Architecture.
+ * Deriv App Builder - Safe Quant Bot with Error Boundary Protection
  */
 
-import { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useDigitsTrading } from '../hooks/use-digits-trading';
 import { useDerivWSContext } from '@/components/custom/deriv-ws-provider';
 import { useLogoSrc } from '@/components/custom/logo-src-provider';
 import { DigitsView } from './digits-view';
 import type { DigitsAppConfig } from '../lib/app-config';
 
-export function LiveDigits({
+// 🛡️ CLASS ERROR BOUNDARY (ป้องกัน React Crash 100%)
+class BotErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error('Bot Error Intercepted:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="fixed bottom-4 right-4 z-50 bg-red-900/90 text-white text-xs px-3 py-2 rounded-lg border border-red-500">
+          ⚠️ Bot Component Reset Required
+          <button 
+            onClick={() => this.setState({ hasError: false })}
+            className="ml-2 underline font-bold"
+          >
+            Reload Bot
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export function LiveDigits(props: {
+  appConfig?: DigitsAppConfig;
+  editMode?: boolean;
+  onSelect?: (key: string) => void;
+  selectedKey?: string | null;
+  rearrangeMode?: boolean;
+  onReorder?: (order: DigitsAppConfig['order']) => void;
+  logoSrc?: string;
+  appName?: string;
+}) {
+  return (
+    <BotErrorBoundary>
+      <LiveDigitsInner {...props} />
+    </BotErrorBoundary>
+  );
+}
+
+function LiveDigitsInner({
   appConfig,
   editMode,
   onSelect,
@@ -44,207 +93,180 @@ export function LiveDigits({
     onAuthWSFailed: logout,
   });
 
-  // Safe Mount Check (ป้องกัน Hydration Error บน Next.js)
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  // ------------------------------------------------------------------
-  // 🚀 AUTOMATED QUANT ENGINE STATES
-  // ------------------------------------------------------------------
+  const [isClient, setIsClient] = useState(false);
   const [isAuto, setIsAuto] = useState<boolean>(false);
   const [botStrategy, setBotStrategy] = useState<'OU_QUANT' | 'DIFF_CLUSTER' | 'EVEN_ODD'>('OU_QUANT');
   const [isTradingLock, setIsTradingLock] = useState<boolean>(false);
-  const [lastLog, setLastLog] = useState<string>('พร้อมเชื่อมต่อกับ Deriv UI...');
+  const [statusLog, setStatusLog] = useState<string>('พร้อมใช้งาน');
 
   const tickHistoryRef = useRef<number[]>([]);
 
-  // 1. ซิงค์ค่า Barrier กับปุ่ม Deriv Native UI
-  const syncBarrierWithDeriv = (barrierDigit: number) => {
-    if (trading.setSelectedDigit) {
-      trading.setSelectedDigit(barrierDigit); // แมตช์เลขบนปุ่มหน้าจอ Deriv ทันที
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
+
+  // 1. ซิงค์ค่า Barrier กับระบบ Deriv
+  const syncBarrier = (digit: number) => {
+    try {
+      if (trading?.setSelectedDigit) {
+        trading.setSelectedDigit(digit);
+      }
+    } catch (e) {
+      console.warn('Sync Barrier error:', e);
     }
   };
 
-  // 2. WebSocket Engine สแกน Ticks
+  // 2. Loop หลักในการรันบอท
   useEffect(() => {
-    if (!mounted) return;
+    if (!isClient || !isAuto || isTradingLock || trading?.isBuying) return;
 
-    if (trading.lastDigit !== undefined && trading.lastDigit !== null) {
+    if (trading?.lastDigit !== undefined && trading?.lastDigit !== null) {
       const history = tickHistoryRef.current;
       history.push(trading.lastDigit);
       if (history.length > 15) history.shift();
 
-      if (isAuto && !isTradingLock && !trading.isBuying && history.length >= 5) {
+      if (history.length >= 5) {
         const sample = history.slice(-5);
         const lastDigit = sample[sample.length - 1];
 
-        // 🧠 STRATEGY 1: OVER / UNDER
+        // OVER / UNDER
         if (botStrategy === 'OU_QUANT') {
-          const lowDigitsCount = sample.filter(d => d <= 3).length;
-          const highDigitsCount = sample.filter(d => d >= 6).length;
+          const lowCount = sample.filter(d => d <= 3).length;
+          const highCount = sample.filter(d => d >= 6).length;
 
-          // ถ้าเข้าโซนยิง OVER (สุ่มยิง Over 2 - แมตช์ปุ่ม)
-          if (lowDigitsCount >= 3 && lastDigit >= 2) {
-            executeSynchronizedTrade('DIGITOVER', 2, 'OVER_UNDER', '🔥 ยิง OVER 2 (Low Cluster Exhaustion)');
-          } 
-          // ถ้าเข้าโซนยิง UNDER (สุ่มยิง Under 7 - แมตช์ปุ่ม)
-          else if (highDigitsCount >= 3 && lastDigit <= 7) {
-            executeSynchronizedTrade('DIGITUNDER', 7, 'OVER_UNDER', '⚡ ยิง UNDER 7 (High Cluster Exhaustion)');
+          if (lowCount >= 3 && lastDigit >= 2) {
+            executeTrade('DIGITOVER', 2, 'OVER_UNDER', '🔥 OVER 2 Signal');
+          } else if (highCount >= 3 && lastDigit <= 7) {
+            executeTrade('DIGITUNDER', 7, 'OVER_UNDER', '⚡ UNDER 7 Signal');
           }
         }
-
-        // 🧠 STRATEGY 2: DIFFER CLUSTER
+        // DIFFER
         else if (botStrategy === 'DIFF_CLUSTER' && history.length >= 4) {
           const len = history.length;
-          const d1 = history[len - 1];
-          const d2 = history[len - 2];
-          const d3 = history[len - 3];
-
-          if (d3 === d2 && d1 !== d2) {
-            executeSynchronizedTrade('DIGITDIFF', d2, 'MATCHES_DIFF', `🎯 ยิง DIFFER ห้ามออกเลข ${d2}`);
+          if (history[len - 3] === history[len - 2] && history[len - 1] !== history[len - 2]) {
+            executeTrade('DIGITDIFF', history[len - 2], 'MATCHES_DIFF', `🎯 DIFFER ${history[len - 2]} Signal`);
           }
         }
-
-        // 🧠 STRATEGY 3: EVEN / ODD
+        // EVEN / ODD
         else if (botStrategy === 'EVEN_ODD' && history.length >= 6) {
           const sample6 = history.slice(-6);
           const evenCount = sample6.filter(d => d % 2 === 0).length;
-          const oddCount = 6 - evenCount;
-
           if (evenCount >= 4) {
-            executeSynchronizedTrade('DIGITODD', 0, 'EVEN_ODD', '⚖️ สวนยิง ODD');
-          } else if (oddCount >= 4) {
-            executeSynchronizedTrade('DIGITEVEN', 0, 'EVEN_ODD', '⚖️ สวนยิง EVEN');
+            executeTrade('DIGITODD', 0, 'EVEN_ODD', '⚖️ ODD Signal');
+          } else if ((6 - evenCount) >= 4) {
+            executeTrade('DIGITEVEN', 0, 'EVEN_ODD', '⚖️ EVEN Signal');
           }
         }
       }
     }
-  }, [trading.lastDigit, isAuto, isTradingLock, trading.isBuying, botStrategy, mounted]);
+  }, [trading?.lastDigit, isAuto, isTradingLock, trading?.isBuying, botStrategy, isClient]);
 
-  // 3. ฟังก์ชันสั่งซื้อแบบ Dynamic Mapping (ซิงค์กับ State หลัก)
-  const executeSynchronizedTrade = (
-    tradeType: string,
-    barrierDigit: number,
-    contractMode: string,
-    logMessage: string
-  ) => {
+  const executeTrade = (tradeType: string, barrier: number, contractMode: string, msg: string) => {
     setIsTradingLock(true);
-    setLastLog(logMessage);
+    setStatusLog(msg);
 
     try {
-      // ซิงค์ปุ่ม Deriv UI
-      syncBarrierWithDeriv(barrierDigit);
-
-      if (trading.setTradeType) (trading.setTradeType as any)(tradeType);
-      if (trading.setContractMode) (trading.setContractMode as any)(contractMode);
+      syncBarrier(barrier);
+      if (trading?.setTradeType) (trading.setTradeType as any)(tradeType);
+      if (trading?.setContractMode) (trading.setContractMode as any)(contractMode);
+      
+      setTimeout(() => {
+        if (trading?.buyContract) {
+          trading.buyContract();
+        }
+      }, 300);
     } catch (err) {
-      console.warn('UI Syncing Notice:', err);
+      console.error('Execution Error:', err);
     }
-
-    // ยิงคำสั่งซื้อผ่าน Hook Native
-    setTimeout(() => {
-      trading.buyContract();
-    }, 350);
   };
 
-  // ปลดล็อกระบบหลังจบสัญญา
   useEffect(() => {
-    if (trading.buyResult || trading.buyError) {
+    if (trading?.buyResult || trading?.buyError) {
       const timer = setTimeout(() => {
-        trading.clearBuyResult();
+        if (trading?.clearBuyResult) trading.clearBuyResult();
         setIsTradingLock(false);
       }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [trading.buyResult, trading.buyError]);
+  }, [trading?.buyResult, trading?.buyError]);
 
   return (
     <div className="relative">
-      {/* 🟢 QUANT BOT CONTROL PANEL */}
-      {mounted && !editMode && (
-        <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-2">
-          {/* Status Indicator Bar */}
+      {/* 🟢 CONTROLS FLOAT */}
+      {isClient && !editMode && (
+        <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-2 font-sans">
           {isAuto && (
-            <div className="bg-black/90 text-emerald-400 text-xs font-mono px-3.5 py-2 rounded-xl border border-emerald-500/40 backdrop-blur-md shadow-2xl flex items-center gap-2 max-w-[320px]">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-              <span className="truncate">{lastLog}</span>
+            <div className="bg-black/90 text-emerald-400 text-xs px-3 py-1.5 rounded-xl border border-emerald-500/40 backdrop-blur-md shadow-2xl flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+              <span>{statusLog}</span>
             </div>
           )}
 
-          {/* Quick Barrier Manual Matcher */}
-          <div className="flex bg-black/90 p-1.5 rounded-2xl border border-white/10 backdrop-blur-md shadow-2xl gap-1 items-center">
-            <span className="text-[11px] text-amber-400 font-bold px-2">Deriv Barrier:</span>
-            {[2, 3, 6, 7].map((digit) => (
+          {/* Sync Barrier Test Buttons */}
+          <div className="flex bg-black/90 p-1.5 rounded-xl border border-white/10 backdrop-blur-md gap-1 items-center">
+            <span className="text-[10px] text-amber-400 font-bold px-1">Barrier:</span>
+            {[2, 3, 6, 7].map((num) => (
               <button
-                key={digit}
+                key={num}
                 type="button"
-                onClick={() => syncBarrierWithDeriv(digit)}
-                className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all ${
-                  trading.selectedDigit === digit
-                    ? 'bg-amber-400 text-black shadow-md scale-105'
-                    : 'bg-gray-800 text-gray-300 hover:text-white'
+                onClick={() => syncBarrier(num)}
+                className={`px-2 py-0.5 rounded text-xs font-bold ${
+                  trading?.selectedDigit === num
+                    ? 'bg-amber-400 text-black'
+                    : 'bg-gray-800 text-gray-300'
                 }`}
               >
-                {digit}
+                {num}
               </button>
             ))}
           </div>
 
-          {/* Bot Strategy Selector */}
-          <div className="flex bg-black/90 p-1 rounded-2xl border border-white/10 backdrop-blur-md shadow-2xl gap-1">
+          {/* Strategy Select */}
+          <div className="flex bg-black/90 p-1 rounded-xl border border-white/10 backdrop-blur-md gap-1">
             <button
               type="button"
               onClick={() => setBotStrategy('OU_QUANT')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
-                botStrategy === 'OU_QUANT'
-                  ? 'bg-amber-400 text-black shadow-lg'
-                  : 'text-gray-400 hover:text-white'
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold ${
+                botStrategy === 'OU_QUANT' ? 'bg-amber-400 text-black' : 'text-gray-400'
               }`}
             >
-              Over/Under AI
+              Over/Under
             </button>
             <button
               type="button"
               onClick={() => setBotStrategy('DIFF_CLUSTER')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
-                botStrategy === 'DIFF_CLUSTER'
-                  ? 'bg-cyan-400 text-black shadow-lg'
-                  : 'text-gray-400 hover:text-white'
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold ${
+                botStrategy === 'DIFF_CLUSTER' ? 'bg-cyan-400 text-black' : 'text-gray-400'
               }`}
             >
-              Differ AI
+              Differ
             </button>
             <button
               type="button"
               onClick={() => setBotStrategy('EVEN_ODD')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
-                botStrategy === 'EVEN_ODD'
-                  ? 'bg-purple-400 text-black shadow-lg'
-                  : 'text-gray-400 hover:text-white'
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold ${
+                botStrategy === 'EVEN_ODD' ? 'bg-purple-400 text-black' : 'text-gray-400'
               }`}
             >
-              Even/Odd AI
+              Even/Odd
             </button>
           </div>
 
-          {/* Main Bot Action Switch */}
+          {/* Start/Stop Button */}
           <button
             type="button"
             onClick={() => setIsAuto(!isAuto)}
-            className={`px-6 py-3.5 rounded-full font-black text-sm shadow-2xl transition-all border-2 active:scale-95 ${
+            className={`px-5 py-3 rounded-full font-black text-xs shadow-2xl transition-all border ${
               isAuto
-                ? 'bg-red-500 hover:bg-red-600 text-white border-red-300 animate-pulse shadow-red-500/50'
-                : 'bg-emerald-400 hover:bg-emerald-500 text-black border-emerald-200 shadow-emerald-500/30'
+                ? 'bg-red-500 text-white border-red-300 animate-pulse'
+                : 'bg-emerald-400 text-black border-emerald-200'
             }`}
           >
-            {isAuto ? '⏹️ STOP AUTOMATION' : `🚀 START AUTO (${botStrategy})`}
+            {isAuto ? '⏹️ STOP AUTO' : `🚀 START AUTO (${botStrategy})`}
           </button>
         </div>
       )}
 
-      {/* Deriv Core Layout */}
       <DigitsView
         authState={authState}
         accounts={accounts}
